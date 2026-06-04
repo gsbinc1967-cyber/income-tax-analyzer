@@ -1,0 +1,127 @@
+import { NextResponse } from 'next/server';
+import Anthropic from '@anthropic-ai/sdk';
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
+
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+const MODELS: Record<string, string> = {
+  sonnet: 'claude-sonnet-4-6',
+  opus: 'claude-opus-4-7',
+};
+
+const DEFAULT_MODEL = 'opus';
+
+function loadFile(filename: string): string {
+  try {
+    const path = join(process.cwd(), 'references', filename);
+    if (existsSync(path)) {
+      return readFileSync(path, 'utf-8');
+    }
+  } catch (e) {
+    console.warn(`Could not load reference file: ${filename}`);
+  }
+  return '';
+}
+
+const SECTION_MAP = loadFile('section-mapping.md');
+const CASE_LAW = loadFile('case-law-landmarks.md');
+const TAX_PLANNING = loadFile('tax-planning.md');
+const NOTICE_HANDLING = loadFile('notice-handling.md');
+
+const SYSTEM_PROMPT_BASE = `You are an expert Indian Income Tax Analyser—a highly qualified Chartered Accountant and Tax Advocate specialising in Indian direct taxation.
+
+## Dual-Act Regime (CRITICAL)
+As of 1 April 2026, India operates under a dual-Act regime:
+- **Income-tax Act, 2025 (ITA 2025)** — governs FY 2026-27 (AY 2027-28) onwards
+- **Income-tax Act, 1961 (ITA 1961)** — governs AY 2025-26 and all earlier assessment years
+
+ALWAYS identify the Assessment Year before citing any section.
+
+## Section Mappings
+${SECTION_MAP}
+
+## Case Law & Disputable Areas
+${CASE_LAW}
+
+## Tax Planning Strategies
+${TAX_PLANNING}
+
+## Notice & Assessment Handling
+${NOTICE_HANDLING}
+
+Respond in professional but accessible English. Use markdown for formatting.`;
+
+const AUDIENCE_INSTRUCTIONS: Record<string, string> = {
+  student: "\n## Audience: Student (Learn Mode)\nExplain concepts from first principles. Define technical terms before using them. Use relatable examples and analogies. Avoid jargon. Be encouraging and educational.",
+  professional: "\n## Audience: Working Professional / Enterprise\nAssume basic tax literacy. Be concise and action-oriented. Focus on practical implications, compliance steps, and deadlines. Avoid over-explaining basics.",
+  ca: "\n## Audience: Chartered Accountant (Advanced)\nUse full technical terminology. Cite exact section numbers, sub-sections, and provisos. Reference CBDT circulars, notifications, and ITAT/HC/SC judgments where relevant. Discuss alternate interpretations and litigation risk.",
+};
+
+function buildSystemPrompt(audience: string, actContext: string) {
+  const suffix = AUDIENCE_INSTRUCTIONS[audience] || '';
+  let contextInstruction = "";
+  if (actContext === "ita2025") {
+    contextInstruction = "\n\n## ACT CONTEXT OVERRIDE\nThe user has explicitly set the context to **ITA 2025**. You MUST answer using the new Income-tax Act, 2025 regardless of the assessment year mentioned, unless absolutely impossible.";
+  } else if (actContext === "ita1961") {
+    contextInstruction = "\n\n## ACT CONTEXT OVERRIDE\nThe user has explicitly set the context to **ITA 1961**. You MUST answer using the old Income-tax Act, 1961 regardless of the assessment year mentioned, unless absolutely impossible.";
+  }
+  return SYSTEM_PROMPT_BASE + contextInstruction + suffix;
+}
+
+export async function POST(req: Request) {
+  try {
+    const data = await req.json();
+    const userMessage = data.message?.trim();
+    const modelKey = data.model || DEFAULT_MODEL;
+    const audience = data.audience || 'professional';
+    const actContext = data.actContext || 'both';
+    const history = data.history || [];
+
+    if (!userMessage) {
+      return NextResponse.json({ error: 'Message is empty' }, { status: 400 });
+    }
+
+    const modelId = MODELS[modelKey] || MODELS[DEFAULT_MODEL];
+    const systemPrompt = buildSystemPrompt(audience, actContext);
+
+    const messages = [...history, { role: 'user', content: userMessage }];
+
+    const responseStream = await anthropic.messages.stream({
+      model: modelId,
+      max_tokens: 8192,
+      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } } as any],
+      messages,
+    });
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          for await (const chunk of responseStream) {
+            if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
+              const text = chunk.delta.text;
+              controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ chunk: text })}\n\n`));
+            }
+          }
+          controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+          controller.close();
+        } catch (err) {
+          controller.error(err);
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
+    });
+  } catch (error: any) {
+    console.error('API Chat Error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
