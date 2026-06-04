@@ -107,7 +107,8 @@ export async function POST(req: Request) {
           }
           controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
           controller.close();
-        } catch (err) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } catch (err: any) {
           controller.error(err);
         }
       },

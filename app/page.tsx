@@ -5,6 +5,10 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import Sidebar from "@/components/Sidebar";
 import CalculatorModal from "@/components/CalculatorModal";
+import PaymentModal from "@/components/PaymentModal";
+import { useAuth } from "@/components/AuthProvider";
+import { doc, updateDoc } from "firebase/firestore";
+import { db } from "../lib/firebase";
 
 // --- Types ---
 type Message = {
@@ -20,6 +24,8 @@ type ModelData = {
 
 // --- Page Component ---
 export default function Home() {
+  const { user, profile, refreshProfile } = useAuth();
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -99,6 +105,24 @@ One of the most radical changes in ITA 2025 is the complete overhaul and consoli
 
   const handleSend = async (text: string = input) => {
     if (!text.trim() || isTyping) return;
+
+    // --- Token Gating Logic ---
+    if (profile && profile.planId !== "professional" && profile.planId !== "ca") {
+      if (profile.freeTrials > 0) {
+        if (user) {
+          try {
+            await updateDoc(doc(db, "users", user.uid), { freeTrials: profile.freeTrials - 1 });
+            refreshProfile();
+          } catch (e) {
+            console.error("Failed to update tokens", e);
+          }
+        }
+      } else {
+        setShowPaymentModal(true);
+        return;
+      }
+    }
+    // --------------------------
 
     const userMsg: Message = { role: "user", content: text };
     setMessages((prev) => [...prev, userMsg]);
@@ -291,6 +315,7 @@ One of the most radical changes in ITA 2025 is the complete overhaul and consoli
         </main>
       </div>
       {isCalcOpen && <CalculatorModal onClose={() => setIsCalcOpen(false)} />}
+      {showPaymentModal && <PaymentModal onClose={() => setShowPaymentModal(false)} />}
     </>
   );
 }

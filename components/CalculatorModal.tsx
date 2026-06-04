@@ -44,27 +44,27 @@ export default function CalculatorModal({ onClose }: { onClose: () => void }) {
       // FY 26-27 Slabs
       if (rem > 400000) {
         rem -= 400000;
-        let slab = Math.min(rem, 400000);
+        const slab = Math.min(rem, 400000);
         tax += slab * 0.05;
         rem -= slab;
       }
       if (rem > 0) {
-        let slab = Math.min(rem, 400000);
+        const slab = Math.min(rem, 400000);
         tax += slab * 0.10;
         rem -= slab;
       }
       if (rem > 0) {
-        let slab = Math.min(rem, 400000);
+        const slab = Math.min(rem, 400000);
         tax += slab * 0.15;
         rem -= slab;
       }
       if (rem > 0) {
-        let slab = Math.min(rem, 400000);
+        const slab = Math.min(rem, 400000);
         tax += slab * 0.20;
         rem -= slab;
       }
       if (rem > 0) {
-        let slab = Math.min(rem, 400000);
+        const slab = Math.min(rem, 400000);
         tax += slab * 0.25;
         rem -= slab;
       }
@@ -79,22 +79,22 @@ export default function CalculatorModal({ onClose }: { onClose: () => void }) {
       // FY 25-26 Slabs (New Regime)
       if (rem > 300000) {
         rem -= 300000;
-        let slab = Math.min(rem, 400000); // 3L to 7L
+        const slab = Math.min(rem, 400000); // 3L to 7L
         tax += slab * 0.05;
         rem -= slab;
       }
       if (rem > 0) {
-        let slab = Math.min(rem, 300000); // 7L to 10L
+        const slab = Math.min(rem, 300000); // 7L to 10L
         tax += slab * 0.10;
         rem -= slab;
       }
       if (rem > 0) {
-        let slab = Math.min(rem, 200000); // 10L to 12L
+        const slab = Math.min(rem, 200000); // 10L to 12L
         tax += slab * 0.15;
         rem -= slab;
       }
       if (rem > 0) {
-        let slab = Math.min(rem, 300000); // 12L to 15L
+        const slab = Math.min(rem, 300000); // 12L to 15L
         tax += slab * 0.20;
         rem -= slab;
       }
@@ -107,7 +107,7 @@ export default function CalculatorModal({ onClose }: { onClose: () => void }) {
       }
     }
 
-    let netTax = tax - rebate;
+    const netTax = tax - rebate;
 
     // Surcharge
     let surchargeRate = 0;
@@ -116,10 +116,10 @@ export default function CalculatorModal({ onClose }: { onClose: () => void }) {
     else if (tti > 10000000) surchargeRate = 0.15;
     else if (tti > 5000000) surchargeRate = 0.10;
 
-    let surcharge = netTax * surchargeRate;
-    let taxAndSurcharge = netTax + surcharge;
-    let cess = taxAndSurcharge * 0.04;
-    let finalTax = taxAndSurcharge + cess;
+    const surcharge = netTax * surchargeRate;
+    const taxAndSurcharge = netTax + surcharge;
+    const cess = taxAndSurcharge * 0.04;
+    const finalTax = taxAndSurcharge + cess;
 
     setResults({
       gti,
