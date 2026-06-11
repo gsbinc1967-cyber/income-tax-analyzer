@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { adminAuth, adminDb } from '@/lib/firebase-admin';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Admin endpoint to get usage analytics
  * Returns aggregated user statistics and cost breakdown
