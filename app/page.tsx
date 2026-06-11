@@ -7,8 +7,9 @@ import Sidebar from "@/components/Sidebar";
 import CalculatorModal from "@/components/CalculatorModal";
 import PaymentModal from "@/components/PaymentModal";
 import { useAuth } from "@/components/AuthProvider";
-import { doc, updateDoc } from "firebase/firestore";
-import { db } from "../lib/firebase";
+import { signOut, auth } from "@/lib/firebase";
+import { useRouter } from "next/navigation";
+
 
 // --- Types ---
 type Message = {
@@ -24,12 +25,14 @@ type ModelData = {
 
 // --- Page Component ---
 export default function Home() {
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile, refreshProfile, loading } = useAuth();
+  const router = useRouter();
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+  const [quotaWarning, setQuotaWarning] = useState<{ show: boolean; remaining: number; limit: number } | null>(null);
   const [audience, setAudience] = useState("professional");
   const [models, setModels] = useState<Record<string, ModelData>>({});
   const [currentModel, setCurrentModel] = useState("opus");
@@ -63,6 +66,15 @@ export default function Home() {
       document.documentElement.classList.remove("dark-mode");
     }
   }, [darkMode]);
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      router.push('/auth/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
 
   const handleShowComparison = () => {
     setMessages((prev) => [
@@ -106,23 +118,16 @@ One of the most radical changes in ITA 2025 is the complete overhaul and consoli
   const handleSend = async (text: string = input) => {
     if (!text.trim() || isTyping) return;
 
-    // --- Token Gating Logic ---
-    if (profile && profile.planId !== "professional" && profile.planId !== "ca") {
-      if (profile.freeTrials > 0) {
-        if (user) {
-          try {
-            await updateDoc(doc(db, "users", user.uid), { freeTrials: profile.freeTrials - 1 });
-            refreshProfile();
-          } catch (e) {
-            console.error("Failed to update tokens", e);
-          }
-        }
-      } else {
+    // --- Free Chat Gating Logic ---
+    // Free users get 3 total free chats, then must upgrade
+    if (profile && profile.planId === "free") {
+      const totalChatsUsed = profile.totalFreeChatsUsed || 0;
+      if (totalChatsUsed >= 3) {
         setShowPaymentModal(true);
         return;
       }
     }
-    // --------------------------
+    // --------------------------------
 
     const userMsg: Message = { role: "user", content: text };
     setMessages((prev) => [...prev, userMsg]);
@@ -130,9 +135,13 @@ One of the most radical changes in ITA 2025 is the complete overhaul and consoli
     setIsTyping(true);
 
     try {
+      const token = user ? await user.getIdToken() : "";
       const response = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
         body: JSON.stringify({
           message: text,
           model: currentModel,
@@ -142,7 +151,29 @@ One of the most radical changes in ITA 2025 is the complete overhaul and consoli
         }),
       });
 
-      if (!response.ok) throw new Error("Network response was not ok");
+      if (!response.ok) {
+        if (response.status === 403) {
+           setShowPaymentModal(true);
+        }
+        throw new Error("Network response was not ok");
+      }
+
+      // Check quota warnings from response headers
+      const quotaRemaining = response.headers.get('X-Quota-Remaining');
+      const quotaLimit = response.headers.get('X-Quota-Limit');
+      const nearLimit = response.headers.get('X-Quota-Near-Limit') === 'true';
+
+      if (nearLimit && quotaRemaining && quotaLimit) {
+        setQuotaWarning({
+          show: true,
+          remaining: parseInt(quotaRemaining),
+          limit: parseInt(quotaLimit),
+        });
+      }
+
+      // Refresh profile after a successful chat to sync usage
+      refreshProfile();
+
       if (!response.body) throw new Error("No response body");
 
       const reader = response.body.getReader();
@@ -186,6 +217,27 @@ One of the most radical changes in ITA 2025 is the complete overhaul and consoli
     }
   };
 
+  if (loading) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '100vh',
+        background: 'linear-gradient(135deg, var(--navy) 0%, #5c6bc0 100%)',
+      }}>
+        <div style={{ textAlign: 'center', color: 'white' }}>
+          <div style={{ fontSize: '36px', marginBottom: '16px' }}>₹</div>
+          <div style={{ fontSize: '18px', fontWeight: 600 }}>Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null; // AuthProvider will redirect to login
+  }
+
   return (
     <>
       <div style={{ height: "4px", background: "linear-gradient(to right, var(--saffron) 33.3%, white 33.3% 66.6%, var(--green) 66.6%)", flexShrink: 0 }}></div>
@@ -217,10 +269,72 @@ One of the most radical changes in ITA 2025 is the complete overhaul and consoli
             <option value="professional">Professional (Enterprise)</option>
             <option value="ca">Chartered Accountant (Advanced)</option>
           </select>
+          <button onClick={() => { setMessages([]); router.push('/'); }} style={{ background: "rgba(79,172,254,0.2)", border: "1px solid rgba(79,172,254,0.4)", color: "white", padding: "6px 14px", borderRadius: "8px", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", gap: "6px" }} title="Go to Home">🏠 Home</button>
           <button onClick={() => setMessages([])} style={{ background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)", color: "white", padding: "6px 14px", borderRadius: "8px", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", gap: "6px" }}>🗑 New Chat</button>
           <button onClick={() => setIsCalcOpen(true)} style={{ background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)", color: "white", padding: "6px 14px", borderRadius: "8px", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", gap: "6px" }}>⚙️ Calculator</button>
+          <button onClick={() => router.push('/usage')} style={{ background: "rgba(76,175,80,0.2)", border: "1px solid rgba(76,175,80,0.4)", color: "white", padding: "6px 14px", borderRadius: "8px", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", gap: "6px" }}>📊 Usage</button>
+          <button onClick={() => router.push('/billing')} style={{ background: "rgba(255,193,7,0.2)", border: "1px solid rgba(255,193,7,0.4)", color: "white", padding: "6px 14px", borderRadius: "8px", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", gap: "6px" }}>💳 Billing</button>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", paddingLeft: "8px", borderLeft: "1px solid rgba(255,255,255,0.2)" }}>
+            <span style={{ fontSize: "12px", color: "rgba(255,255,255,0.7)" }}>{user?.email}</span>
+            <button onClick={handleLogout} style={{ background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)", color: "white", padding: "6px 12px", borderRadius: "8px", cursor: "pointer", fontSize: "12px" }}>Logout</button>
+          </div>
         </div>
       </header>
+
+      {/* Quota Warning Banner */}
+      {quotaWarning?.show && (
+        <div style={{
+          background: "linear-gradient(135deg, rgba(255,193,7,0.15), rgba(255,152,0,0.1))",
+          border: "1px solid rgba(255,193,7,0.4)",
+          borderRadius: "8px",
+          padding: "16px 24px",
+          margin: "16px 24px 0",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "16px",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <div style={{ fontSize: "20px" }}>⚠️</div>
+            <div>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>
+                You're approaching your monthly quota
+              </div>
+              <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>
+                {quotaWarning.remaining} of {quotaWarning.limit} chats remaining this month
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => router.push('/billing')}
+            style={{
+              padding: "8px 16px",
+              background: "var(--navy)",
+              color: "white",
+              border: "none",
+              borderRadius: "6px",
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Upgrade Plan
+          </button>
+          <button
+            onClick={() => setQuotaWarning(null)}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "16px",
+              color: "var(--text-muted)",
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         {/* Sidebar */}

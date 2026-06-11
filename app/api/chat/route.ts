@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { adminAuth, adminDb, FieldValue } from '@/lib/firebase-admin';
+import { checkQuota, logUsage } from '@/lib/usage';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -73,6 +75,18 @@ function buildSystemPrompt(audience: string, actContext: string) {
 
 export async function POST(req: Request) {
   try {
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const token = authHeader.split('Bearer ')[1];
+    let decodedToken;
+    try {
+      decodedToken = await adminAuth.verifyIdToken(token);
+    } catch (e) {
+      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+    }
+
     const data = await req.json();
     const userMessage = data.message?.trim();
     const modelKey = data.model || DEFAULT_MODEL;
@@ -82,6 +96,23 @@ export async function POST(req: Request) {
 
     if (!userMessage) {
       return NextResponse.json({ error: 'Message is empty' }, { status: 400 });
+    }
+
+    // Check quota for all users
+    const quotaCheck = await checkQuota(decodedToken.uid);
+    if (!quotaCheck.allowed) {
+      return NextResponse.json(
+        {
+          error: 'Monthly request quota exceeded',
+          quota: quotaCheck,
+        },
+        { status: 429, headers: {
+          'Retry-After': '86400', // 1 day
+          'X-Quota-Limit': quotaCheck.limit.toString(),
+          'X-Quota-Used': (quotaCheck.limit - quotaCheck.remaining).toString(),
+          'X-Quota-Remaining': '0',
+        }}
+      );
     }
 
     const modelId = MODELS[modelKey] || MODELS[DEFAULT_MODEL];
@@ -99,12 +130,26 @@ export async function POST(req: Request) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
+          let totalInputTokens = 0;
+          let totalOutputTokens = 0;
+
           for await (const chunk of responseStream) {
             if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
               const text = chunk.delta.text;
               controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ chunk: text })}\n\n`));
             }
+            // Track token usage
+            if (chunk.type === 'message_start' && chunk.message.usage) {
+              totalInputTokens = chunk.message.usage.input_tokens;
+            }
+            if (chunk.type === 'message_delta' && chunk.usage) {
+              totalOutputTokens = chunk.usage.output_tokens;
+            }
           }
+
+          // Log the usage after successful response
+          await logUsage(decodedToken.uid, modelId, '/api/chat', totalInputTokens, totalOutputTokens);
+
           controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
           controller.close();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -114,11 +159,18 @@ export async function POST(req: Request) {
       },
     });
 
+    // Get updated quota after this request
+    const updatedQuota = await checkQuota(decodedToken.uid);
+
     return new Response(stream, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
+        'X-Quota-Limit': updatedQuota.limit.toString(),
+        'X-Quota-Remaining': updatedQuota.remaining.toString(),
+        'X-Quota-Near-Limit': (updatedQuota.nearLimit ? 'true' : 'false'),
+        'X-Quota-Percentage': (updatedQuota.percentageUsed || 0).toString(),
       },
     });
   } catch (error: any) {

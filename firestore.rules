@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      // Users can only read their own profile
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // Users can create their profile ONLY IF it has required fields
+      allow create: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.resource.data.email == request.auth.token.email
+                    && request.resource.data.planId == 'free'
+                    && request.resource.data.monthlyQuota == 3
+                    && (request.resource.data.currentUsage == 0 || !('currentUsage' in request.resource.data))
+                    && (request.resource.data.totalFreeChatsUsed == 0 || !('totalFreeChatsUsed' in request.resource.data))
+                    && request.resource.data.currentMonth == request.time.getFullYear() * 100 + request.time.getMonth() + 1;
+
+      // Users cannot update their profile directly (server-side only)
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /usage_logs/{logId} {
+      // Users can read their own usage logs
+      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      // Server-only writes
+      allow write: if false;
+    }
+
+    match /subscriptions/{subscriptionId} {
+      // Users can read their subscription data
+      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      // Server-only writes
+      allow write: if false;
+    }
+  }
+}

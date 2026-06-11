@@ -1,8 +1,9 @@
 "use client";
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { auth, db, signInAnonymously } from "../lib/firebase";
+import { auth, db } from "../lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
+import { useRouter, usePathname } from "next/navigation";
 
 interface AuthContextType {
   user: User | null;
@@ -24,6 +25,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const router = useRouter();
+  const pathname = usePathname();
 
   const fetchProfile = async (uid: string) => {
     const docRef = doc(db, "users", uid);
@@ -31,10 +34,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (docSnap.exists()) {
       setProfile(docSnap.data());
     } else {
-      // Create profile for new users (including anonymous)
-      const newProfile = { freeTrials: 3, planId: 'free', isAnonymous: auth.currentUser?.isAnonymous };
-      await setDoc(docRef, newProfile, { merge: true });
-      setProfile(newProfile);
+      // Profile should exist after signup, but fallback in case
+      setProfile(null);
     }
   };
 
@@ -49,17 +50,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         await fetchProfile(currentUser.uid);
         setLoading(false);
       } else {
-        // Automatically sign in anonymously if not logged in
-        try {
-          await signInAnonymously(auth);
-        } catch (error) {
-          console.error("Anonymous auth failed", error);
-          setLoading(false);
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
+
+        // Redirect to login if not on auth pages and not authenticated
+        const isAuthPage = pathname?.startsWith('/auth');
+        if (!isAuthPage && pathname !== '/') {
+          router.push('/auth/login');
+        } else if (pathname === '/' && !currentUser) {
+          router.push('/auth/login');
         }
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [router, pathname]);
 
   return (
     <AuthContext.Provider value={{ user, loading, profile, refreshProfile }}>
