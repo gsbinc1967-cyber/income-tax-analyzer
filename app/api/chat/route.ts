@@ -5,6 +5,8 @@ import { join } from 'path';
 import { adminAuth, adminDb, FieldValue } from '@/lib/firebase-admin';
 import { checkQuota, logUsage } from '@/lib/usage';
 
+export const dynamic = 'force-dynamic';
+
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
